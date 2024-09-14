@@ -131,10 +131,12 @@ def main():
             if mask_capture is None:
                 mask_capture = mask
                 mask_captures = 1
+                cv2.imshow("RTCP Stream", frame)
                 continue
             elif mask_captures < 10:
                 mask_capture = cv2.bitwise_or(mask_capture, mask)
                 mask_captures += 1
+                cv2.imshow("RTCP Stream", frame)
                 continue
             else:
                 mask = mask_capture
