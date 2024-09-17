@@ -105,15 +105,57 @@ def non_max_suppression(boxes, scores, threshold=1e-1):
     return boxes[keep]
 
 
+def convert_to_cv8uc1(image):
+    # Check if the image is already grayscale and has 2 dimensions
+    if len(image.shape) == 2:
+        print("Image is already grayscale.")
+        gray_image = image
+    else:
+        # Convert color image to grayscale
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Normalize the image to range [0, 255] if necessary
+    if gray_image.dtype != np.uint8:
+        gray_image = cv2.normalize(gray_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    
+    return gray_image
+
+
+def sobel_edge_detection(image):
+    # Convert to grayscale if needed
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Sobel edge detection
+    grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=9)
+    grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=9)
+    edge_strength = cv2.magnitude(grad_x, grad_y)
+    
+    # Normalize the edge strength to the range [0, 1]
+    edge_strength = cv2.normalize(edge_strength, None, 0, 1, cv2.NORM_MINMAX)
+    
+    return edge_strength
+
+def gaussian_blur(image):
+    # Apply Gaussian blur
+    blurred = cv2.GaussianBlur(image, (19, 19), 0)
+    return blurred
+
+def threshold_image(image, thresh):
+    # Apply thresholding
+    _, thresh_img = cv2.threshold(image, thresh, 1.0, cv2.THRESH_BINARY)
+    return thresh_img
+
 def main():
-    rtcp_stream_url = "./test3.mp4"
+    rtcp_stream_url = "test.mp4"
     cap = cv2.VideoCapture(rtcp_stream_url)
     if not cap.isOpened():
         print("Error: Unable to open RTCP stream")
     else:
         img1 = None
         img2 = None
-        mask_capture = None
+        latest = None
+        counter = 0
+        mask = None
         mask_captures = 0
         while True:
             ret, frame = cap.read()
@@ -122,41 +164,47 @@ def main():
                 print("Error: Unable to read frame from video")
                 break
             img2 = img1
-            img1 = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            img1 = frame.copy()
+
             if img2 is None:
                 continue
 
-            kernel = np.array((9,9), dtype=np.uint8)
-            mask = get_mask(img1, img2, kernel)
-            if mask_capture is None:
-                mask_capture = mask
-                mask_captures = 1
-                cv2.imshow("RTCP Stream", frame)
-                continue
-            elif mask_captures < 10:
-                mask_capture = cv2.bitwise_or(mask_capture, mask)
-                mask_captures += 1
-                cv2.imshow("RTCP Stream", frame)
-                continue
-            else:
-                mask = mask_capture
-                mask_capture = None
+            edge1 = sobel_edge_detection(img1)
+            edge2 = sobel_edge_detection(img2)
+            
+            # Blur to reduce noise
+            blurred_edge1 = gaussian_blur(img1)
+            blurred_edge2 = gaussian_blur(img2)
+            
+            # Compute motion by taking the absolute difference
+            motion = cv2.absdiff(blurred_edge1, blurred_edge2)
+            
+            # Threshold to eliminate small changes (noise)
+            filtered_motion = threshold_image(motion, 0.001)
 
-            detections = get_contour_detections(mask, thresh=40)
+            mask = filtered_motion
+            
+            print(mask.shape)
+            detections = get_contour_detections(convert_to_cv8uc1(mask), thresh=40)
 
             # separate bboxes and scores
             if len(detections) > 0:
                 bboxes = detections[:, :4]
                 scores = detections[:, 4]
                 # Get Non-Max Suppressed Bounding Boxes
-                nms_bboxes = non_max_suppression(bboxes, scores, threshold=0.1)
+                nms_bboxes = non_max_suppression(bboxes, scores, threshold=3)
 
                 for box in nms_bboxes:
                     x1, y1, x2, y2 = box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green bounding box
+                    # calc bounding box area
+                    area = (x2 - x1) * (y2 - y1)
+                    if area > 500:
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green bounding box
+
 
             # Display the frame
-            cv2.imshow("RTCP Stream", frame)
+            cv2.imshow("frame", frame)
+            cv2.imshow("mask", mask * 1.5)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
